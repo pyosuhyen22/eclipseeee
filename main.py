@@ -1,116 +1,84 @@
 import streamlit as st
-import plotly.graph_objects as go
 import numpy as np
-import vpython as vp
+import plotly.graph_objects as go
+from vpython import sphere, vector, rate, color, canvas
 
-# 웹사이트 제목 설정
-st.title("행성 식현상(Transit) 시뮬레이션")
+# ---------------------
+# 기본 설정
+# ---------------------
+st.set_page_config(page_title="식현상 시뮬레이션", layout="wide")
+st.title("🌍 식현상 기반 항성 밝기 변화 시뮬레이터")
 
-# 사이드바에 입력 변수 설정
-st.sidebar.header("변수 설정")
+# ---------------------
+# 사용자 입력
+# ---------------------
+st.sidebar.header("⚙️ 파라미터 설정")
 
-# 행성 반경 슬라이더 (단위: 지구 반경)
-planet_radius_earth = st.sidebar.slider("행성 반경 (지구 반경)", 0.5, 2.0, 1.0, 0.1)
-planet_radius = planet_radius_earth * 6371  # 지구 반경 (km) 기준
+R_planet = st.sidebar.slider("행성 반경 (지구 반경)", 0.1, 5.0, 1.0, 0.1)   # 지구 반경 단위
+R_star = st.sidebar.slider("항성 반경 (태양 반경)", 0.5, 5.0, 1.0, 0.1)     # 태양 반경 단위
+distance = st.sidebar.slider("행성과 항성 거리 (항성 반경 단위)", 2.0, 20.0, 10.0, 0.5)
+T_star = st.sidebar.slider("항성 온도 (1000 K)", 2.0, 10.0, 6.0, 0.1) * 1000  # Kelvin
 
-# 항성 반경 슬라이더 (단위: 태양 반경)
-star_radius_sun = st.sidebar.slider("항성 반경 (태양 반경)", 0.5, 2.0, 1.0, 0.1)
-star_radius = star_radius_sun * 696340  # 태양 반경 (km) 기준
+# ---------------------
+# 광도 계산 함수
+# ---------------------
+def luminosity(R_star, T_star):
+    # 상대적 광도 (스테판-볼츠만 법칙, 상수 제외)
+    return R_star**2 * T_star**4
 
-# 행성과 항성 사이 거리 슬라이더 (단위: AU)
-distance_au = st.sidebar.slider("행성과 항성 사이 거리 (AU)", 0.1, 5.0, 1.0, 0.1)
-distance = distance_au * 1.496e8  # AU를 km로 변환
+# 두 원의 겹치는 면적 (항성 원반과 행성 원반)
+def overlap_area(Rs, Rp, d):
+    if d >= Rs + Rp:  # 안겹침
+        return 0.0
+    if d <= abs(Rs - Rp):  # 작은 원이 큰 원 안에 완전히 포함
+        return np.pi * min(Rs, Rp)**2
+    r2, R2 = Rp**2, Rs**2
+    alpha = np.arccos((d**2 + r2 - R2) / (2*d*Rp))
+    beta  = np.arccos((d**2 + R2 - r2) / (2*d*Rs))
+    return (r2 * alpha + R2 * beta -
+            0.5 * np.sqrt((-d+Rp+Rs)*(d+Rp-Rs)*(d-Rp+Rs)*(d+Rp+Rs)))
 
-# 항성 온도 슬라이더 (단위: 1,000K)
-star_temp_k = st.sidebar.slider("항성 온도 (1,000K)", 1.0, 20.0, 5.0, 0.5)
-star_temp = star_temp_k * 1000
+# ---------------------
+# 밝기 곡선 계산
+# ---------------------
+time = np.linspace(0, 1, 200)  # 공전 주기 정규화
+brightness = []
 
-# 항성 밝기 계산 함수
-def calculate_star_brightness(star_radius, planet_radius, distance):
-    # 정사영 공식을 활용한 밝기 감소율 계산
-    # 행성의 면적 / 항성의 면적
-    area_ratio = (planet_radius / star_radius)**2
-    # 밝기 변화율: 1 - (행성의 면적 / 항성의 면적)
-    brightness_change = 1 - area_ratio
-    return brightness_change
+for t in time:
+    # 행성의 x좌표 (항성 앞을 가로지르는 단순 모델)
+    x = (t - 0.5) * 2 * distance
+    d = abs(x)  # 중심에서 거리
+    A_overlap = overlap_area(R_star, R_planet/10, d)  # Rp 단위 맞춤 (대략 조정)
+    A_star = np.pi * R_star**2
+    flux = (A_star - A_overlap) / A_star
+    brightness.append(flux)
 
-# 밝기 변화 계산
-brightness_change = calculate_star_brightness(star_radius, planet_radius, distance)
-
-# 시뮬레이션 섹션
-st.header("시뮬레이션 결과")
-
-# 밝기 변화 그래프 (Plotly)
-st.subheader("항성의 밝기 변화 그래프")
-
-# x축: 행성의 위치, y축: 밝기 변화
-x = np.linspace(-star_radius - planet_radius, star_radius + planet_radius, 1000)
-y = np.ones_like(x)
-
-# 식현상 구간
-transit_start = -star_radius + planet_radius
-transit_end = star_radius - planet_radius
-
-for i, pos in enumerate(x):
-    # 행성이 항성 앞을 지나는 경우 (밝기 감소)
-    if pos >= -planet_radius and pos <= planet_radius:
-        y[i] = brightness_change
-
-fig = go.Figure(data=go.Scatter(x=x, y=y, mode='lines'))
+# ---------------------
+# Plotly 그래프
+# ---------------------
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=time, y=brightness, mode="lines", name="상대 밝기"))
 fig.update_layout(
-    title="행성 식현상에 따른 항성 밝기 변화",
-    xaxis_title="시간 (상대적 위치)",
-    yaxis_title="상대적 밝기",
-    yaxis_range=[brightness_change - 0.01, 1.01]
+    title="항성 밝기 변화 (Transit Light Curve)",
+    xaxis_title="시간 (공전 주기)",
+    yaxis_title="상대 밝기",
+    yaxis=dict(range=[min(brightness)-0.01, 1.01])
 )
-st.plotly_chart(fig)
 
-# 애니메이션 출력 (WebVPython)
-st.subheader("행성 공전 애니메이션")
-st.write("`웹 환경에서는 VPython이 작동하지 않을 수 있습니다. 로컬 환경에서 VPython으로 실행하면 확인 가능합니다.`")
+st.plotly_chart(fig, use_container_width=True)
 
-# VPython 애니메이션 코드 (Streamlit에서는 직접 실행되지 않음)
-# 웹에서 실행 가능한 형태로 변환하거나 별도 라이브러리 사용 필요
-# VPython 코드를 Streamlit에서 직접 실행하는 것은 복잡하므로,
-# 실제 VPython 환경에서 실행 가능한 코드를 예시로 제공합니다.
-# 이 코드는 Streamlit 웹 페이지에 직접적으로 시각화되지는 않습니다.
-vpython_code = """
-from vpython import *
+# ---------------------
+# WebVPython 애니메이션
+# ---------------------
+st.subheader("🌌 공전 애니메이션")
 
-# 행성, 항성 반경 및 거리 설정 (VPython용)
-planet_radius_vp = {0}
-star_radius_vp = {1}
-distance_vp = {2}
+# Streamlit에서 WebVPython 캔버스는 직접 보여주기 어려움 → iframe 삽입 방식
+# 단독 실행 시에는 아래 코드가 VPython 창에서 실행됨
+scene = canvas(title="행성 공전", width=600, height=400, background=color.black)
 
-# 화면 설정
-scene = canvas(title='행성 식현상 애니메이션', width=600, height=600)
-scene.range = distance_vp * 1.5
+star = sphere(pos=vector(0,0,0), radius=R_star*0.2, color=color.yellow, emissive=True)
+planet = sphere(pos=vector(distance,0,0), radius=R_planet*0.05, color=color.blue, make_trail=True)
 
-# 항성 객체
-star = sphere(pos=vector(0,0,0), radius=star_radius_vp, color=color.yellow, emissive=True)
-star.shininess = 0.5
-star.material = materials.emissive
-
-# 행성 객체
-planet = sphere(pos=vector(distance_vp,0,0), radius=planet_radius_vp, color=color.blue)
-
-# 공전 궤도
-orbit = ring(pos=vector(0,0,0), axis=vector(0,1,0), radius=distance_vp, thickness=distance_vp*0.01, color=color.gray(0.5))
-
-# 조명
-local_light(pos=vector(0,0,0), color=color.white)
-
-# 애니메이션 루프
-t = 0
-dt = 0.01
-while True:
-    rate(100)
-    theta = 2 * pi * t
-    x = distance_vp * cos(theta)
-    y = distance_vp * sin(theta)
-    planet.pos = vector(x, y, 0)
-    t += dt
-
-""".format(planet_radius/10000, star_radius/10000, distance/10000) # 값을 적절히 스케일링하여 시각화
-
-st.code(vpython_code, language='python')
+for t in np.linspace(0, 2*np.pi, 200):
+    rate(50)
+    planet.pos = vector(distance*np.cos(t), distance*np.sin(t), 0)
